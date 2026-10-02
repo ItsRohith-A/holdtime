@@ -1,0 +1,40 @@
+{
+  "name": "holdtime",
+  "displayName": "Holdtime",
+  "description": "Learn while Claude works: short facts and yes/no questions in the band above the prompt, picked from what Claude is doing, paused whenever Claude needs you.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Rohith A"
+  },
+  "homepage": "https://github.com/ItsRohith-A/holdtime#readme",
+  "repository": "https://github.com/ItsRohith-A/holdtime",
+  "supportUrl": "https://github.com/ItsRohith-A/holdtime/issues",
+  "privacyPolicyUrl": "https://github.com/ItsRohith-A/holdtime/blob/main/PRIVACY.md",
+  "license": "MIT",
+  "keywords": [
+    "learning",
+    "quiz",
+    "flashcards",
+    "spaced-repetition",
+    "focus"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "daily_goal": {
+      "type": "number",
+      "title": "Daily goal",
+      "description": "Cards per day before Holdtime goes quiet.",
+      "default": 20,
+      "min": 1,
+      "max": 500
+    },
+    "max_per_turn": {
+      "type": "number",
+      "title": "Cards per turn",
+      "description": "Most cards shown during one Claude turn.",
+      "default": 5,
+      "min": 1,
+      "max": 50
+    }
+  }
+}

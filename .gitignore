@@ -1,0 +1,3 @@
+# Local copy of the Claude Code API types, written by /plugin-types
+.claude/
+node_modules/

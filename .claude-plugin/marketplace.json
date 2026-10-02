@@ -1,0 +1,15 @@
+{
+  "name": "holdtime",
+  "description": "Holdtime: learn while Claude Code works.",
+  "owner": {
+    "name": "Rohith A"
+  },
+  "plugins": [
+    {
+      "name": "holdtime",
+      "description": "Short facts and yes/no questions above the prompt while Claude works, picked from the session and paused whenever Claude needs you.",
+      "category": "learning",
+      "source": "./"
+    }
+  ]
+}

@@ -1,0 +1,122 @@
+import { describe, expect, test } from 'claude-code/testing'
+
+import { CARDS } from '../content'
+import type { Card } from '../types'
+import { addDays, bump, decay, freshWeights, grade, pickCard, topicOf, BASE_WEIGHT } from './planner'
+
+const DAY = '2026-10-02'
+
+/** A fixed sequence of "random" numbers, repeating its last one. */
+function rolls(...values: number[]): () => number {
+  let i = 0
+  return () => values[Math.min(i++, values.length - 1)] ?? 0
+}
+
+const fact = (id: string, topic: Card['topic'] = 'git'): Card => ({ id, topic, kind: 'fact', text: id })
+
+describe('topicOf', () => {
+  test('reads the topic from a file extension', () => {
+    expect(topicOf('Edit', { file_path: 'src/app.tsx' })).toBe('javascript')
+    expect(topicOf('Read', { file_path: 'C:\\work\\api\\main.py' })).toBe('python')
+    expect(topicOf('Write', { file_path: 'repo/.gitignore' })).toBe('git')
+    expect(topicOf('Read', { file_path: 'notes.md' })).toBe(null)
+  })
+
+  test('reads the topic from the program a command runs', () => {
+    expect(topicOf('Bash', { command: 'cd api && pytest -q' })).toBe('python')
+    expect(topicOf('Bash', { command: 'CI=1 npm test' })).toBe('javascript')
+    expect(topicOf('Bash', { command: 'git rebase -i HEAD~3' })).toBe('git')
+    expect(topicOf('Bash', { command: 'ls -la' })).toBe(null)
+  })
+})
+
+describe('weights', () => {
+  test('a signal raises its topic, and decay fades it but never below the base', () => {
+    const bumped = bump(freshWeights(), 'python')
+    expect(bumped.python).toBe(BASE_WEIGHT + 1)
+    const faded = decay(decay(decay(decay(decay(decay(decay(decay(decay(decay(bumped))))))))))
+    expect(faded.python).toBeGreaterThan(BASE_WEIGHT - 0.0001)
+    expect(faded.git).toBe(BASE_WEIGHT)
+  })
+})
+
+describe('grade', () => {
+  const card: Card = { id: 'q', topic: 'git', kind: 'yesno', text: 'q?', answer: true, explain: 'x' }
+
+  test('a right answer moves a card up a box and pushes it further out', () => {
+    const once = grade({}, card, true, DAY)
+    expect(once['q']).toEqual({ box: 1, due: addDays(DAY, 1), seen: 1, right: 1 })
+    const twice = grade(once, card, true, DAY)
+    expect(twice['q']).toEqual({ box: 2, due: addDays(DAY, 2), seen: 2, right: 2 })
+  })
+
+  test('a wrong answer sends a card back to box 1', () => {
+    let p = grade({}, card, true, DAY)
+    p = grade(p, card, true, DAY)
+    p = grade(p, card, false, DAY)
+    expect(p['q']?.box).toBe(1)
+    expect(p['q']?.right).toBe(2)
+  })
+
+  test('a read fact moves up without counting as an answer', () => {
+    const p = grade({}, fact('f'), null, DAY)
+    expect(p['f']).toEqual({ box: 1, due: addDays(DAY, 1), seen: 1, right: 0 })
+  })
+})
+
+describe('pickCard', () => {
+  const cards = [fact('a'), fact('b'), fact('c')]
+
+  test('never repeats a card already shown this session', () => {
+    expect(pickCard(cards, freshWeights(), {}, DAY, new Set(['a', 'b']))?.id).toBe('c')
+    expect(pickCard(cards, freshWeights(), {}, DAY, new Set(['a', 'b', 'c']))).toBe(null)
+  })
+
+  test('prefers a card never seen over one seen before', () => {
+    const progress = { a: { box: 3, due: addDays(DAY, 5), seen: 3, right: 0 }, b: { box: 3, due: addDays(DAY, 5), seen: 3, right: 0 } }
+    expect(pickCard(cards, freshWeights(), progress, DAY, new Set(), rolls(0, 0.9, 0))?.id).toBe('c')
+  })
+
+  test('brings back a due card one time in three', () => {
+    const progress = { a: { box: 1, due: DAY, seen: 1, right: 0 } }
+    expect(pickCard(cards, freshWeights(), progress, DAY, new Set(), rolls(0, 0.1, 0))?.id).toBe('a')
+    expect(pickCard(cards, freshWeights(), progress, DAY, new Set(), rolls(0, 0.9, 0))?.id).not.toBe('a')
+  })
+
+  test('draws the topic by weight', () => {
+    const mixed = [fact('g', 'git'), fact('p', 'python'), fact('j', 'javascript')]
+    const weights = { javascript: 0, python: 10, git: 0 }
+    expect(pickCard(mixed, weights, {}, DAY, new Set(), rolls(0.5, 0.5, 0))?.id).toBe('p')
+  })
+})
+
+describe('content', () => {
+  test('every card id is unique', () => {
+    expect(new Set(CARDS.map(card => card.id)).size).toBe(CARDS.length)
+  })
+
+  test('every card is well formed and short enough for the band', () => {
+    for (const card of CARDS) {
+      expect(card.text.length).toBeLessThan(130)
+      if (card.kind === 'yesno') {
+        expect(typeof card.answer).toBe('boolean')
+        expect(card.explain?.length ?? 0).toBeGreaterThan(10)
+        expect(card.explain?.length ?? 0).toBeLessThan(200)
+        expect(card.text.endsWith('?')).toBe(true)
+      } else {
+        expect(card.answer).toBe(undefined)
+      }
+    }
+  })
+
+  test('each topic has facts and questions, and answers are not all one way', () => {
+    for (const topic of ['javascript', 'python', 'git'] as const) {
+      const mine = CARDS.filter(card => card.topic === topic)
+      const yes = mine.filter(card => card.answer === true).length
+      const no = mine.filter(card => card.answer === false).length
+      expect(mine.filter(card => card.kind === 'fact').length).toBeGreaterThan(9)
+      expect(yes).toBeGreaterThan(2)
+      expect(no).toBeGreaterThan(2)
+    }
+  })
+})
