@@ -2,7 +2,7 @@
   "name": "holdtime",
   "displayName": "Holdtime",
   "description": "Learn while Claude works: short facts and yes/no questions in the band above the prompt, picked from what Claude is doing, paused whenever Claude needs you.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": {
     "name": "Rohith A"
   },
