@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { CARDS } from '../content'
 import type { Card } from '../types'
-import { addDays, bump, decay, freshWeights, grade, pickCard, topicOf, BASE_WEIGHT } from './planner'
+import { addDays, bump, decay, freshWeights, grade, isAnswered, keyOf, pickCard, seed, topicOf, BASE_WEIGHT } from './planner'
 
 const DAY = '2026-10-02'
 
@@ -37,6 +37,33 @@ describe('weights', () => {
     const faded = decay(decay(decay(decay(decay(decay(decay(decay(decay(decay(bumped))))))))))
     expect(faded.python).toBeGreaterThan(BASE_WEIGHT - 0.0001)
     expect(faded.git).toBe(BASE_WEIGHT)
+  })
+})
+
+describe('project files and asks', () => {
+  test('seeding raises each found topic once', () => {
+    const seeded = seed(freshWeights(), ['javascript', 'javascript', 'python'])
+    expect(seeded).toEqual({ javascript: BASE_WEIGHT + 1, python: BASE_WEIGHT + 1, git: BASE_WEIGHT })
+  })
+
+  test('keyOf picks the field that identifies a call', () => {
+    expect(keyOf({ command: 'npm publish', description: 'x' })).toBe('npm publish')
+    expect(keyOf({ file_path: 'a.ts', old_string: 'x' })).toBe('a.ts')
+    expect(keyOf({})).toBe('')
+  })
+
+  test('an ask is answered when its own call finishes, or new work starts after it', () => {
+    const ask = { tool: 'Bash', key: 'npm publish', at: 100 }
+    expect(isAnswered(ask, { tool: 'Read', key: 'a.ts', startedAt: 50 }, true)).toBe(false)
+    expect(isAnswered(ask, { tool: 'Bash', key: 'npm publish', startedAt: 50 }, true)).toBe(true)
+    expect(isAnswered(ask, { tool: 'Read', key: 'a.ts', startedAt: 150 }, false)).toBe(true)
+    expect(isAnswered(ask, { tool: 'Read', key: 'a.ts', startedAt: 100 }, false)).toBe(false)
+  })
+
+  test('a question has no call of its own: only new work answers it', () => {
+    const question = { tool: '', key: '', at: 100 }
+    expect(isAnswered(question, { tool: 'Bash', key: '', startedAt: 50 }, true)).toBe(false)
+    expect(isAnswered(question, { tool: 'Bash', key: '', startedAt: 200 }, false)).toBe(true)
   })
 })
 

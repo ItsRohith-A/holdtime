@@ -104,6 +104,47 @@ export function bump(weights: Weights, topic: Topic): Weights {
   return { ...weights, [topic]: weights[topic] + 1 }
 }
 
+/**
+ * Project files that say what a repository is written in, checked once at
+ * session start so the very first card already fits the project.
+ */
+export const PROJECT_FILES: ReadonlyArray<[string, Topic]> = [
+  ['package.json', 'javascript'],
+  ['tsconfig.json', 'javascript'],
+  ['pyproject.toml', 'python'],
+  ['requirements.txt', 'python'],
+  ['setup.py', 'python'],
+]
+
+/** Raises the weight of each topic a project file pointed at, once per topic. */
+export function seed(weights: Weights, found: readonly Topic[]): Weights {
+  return [...new Set(found)].reduce(bump, weights)
+}
+
+/**
+ * A tool call Claude asked the person to approve, or a question it put to
+ * them. `tool` and `key` identify the call; both are empty for a question.
+ */
+export type Ask = { tool: string; key: string; at: number }
+
+/** The input field that tells one call of a tool from another. */
+export function keyOf(input: Readonly<Record<string, unknown>>): string {
+  for (const field of ['command', 'file_path', 'notebook_path', 'url', 'pattern', 'query']) {
+    const value = input[field]
+    if (typeof value === 'string') return value
+  }
+  return ''
+}
+
+/**
+ * Whether Claude has moved on from an ask: the call that asked has finished,
+ * or a new tool call started after it, which Claude only does once answered.
+ */
+export function isAnswered(ask: Ask, call: { tool: string; key: string; startedAt: number }, isFinished: boolean): boolean {
+  if (!isFinished) return call.startedAt > ask.at
+  return ask.tool !== '' && call.tool === ask.tool && call.key === ask.key
+}
+
 /** The day of a timestamp, as YYYY-MM-DD in UTC. */
 export function dayOf(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10)

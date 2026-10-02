@@ -9,9 +9,8 @@ Claude is doing right now, steps aside the moment Claude needs you, and
 remembers what you got wrong so it can ask again later.
 
 ```
-Holdtime · Git · yes or no?
+Holdtime · Git · yes or no?   1: Yes   2: No   9: Hide
 Does `git rebase` give the rebased commits new hashes?
-1: Yes   2: No   9: Hide
 ```
 
 When Claude finishes, one line under its answer tells you how it went:
@@ -30,7 +29,8 @@ phone. Holdtime keeps the break short and useful:
 - **Claude always comes first.** A permission prompt or a question from Claude
   hides the card at once; it comes back when Claude carries on.
 - **About your work.** Editing `.py` files or running `pytest` brings Python
-  cards; `git` commands bring Git cards.
+  cards; `git` commands bring Git cards. Even the first card fits: a
+  `pyproject.toml` or `package.json` in the folder sets the starting topic.
 - **It sticks.** Spaced repetition brings a missed question back the next day,
   and correct ones further and further apart.
 - **It stops.** At most 5 cards per turn and 20 per day by default.
@@ -77,6 +77,7 @@ of starting a prompt. You can also click the buttons, or focus the band with
 | `/holdtime` | Today's count, your accuracy, and accuracy by topic |
 | `/holdtime pause` | Turn cards off (stays off across sessions) |
 | `/holdtime resume` | Turn them back on |
+| `/holdtime reset` | Delete your saved progress and start fresh |
 
 ### Settings
 
@@ -105,8 +106,8 @@ this project; none are copied from other sites.
 Everything stays on your computer. Holdtime makes no network requests and
 collects no personal data. It reads only the name of each tool Claude uses,
 the file extension, and the first word of a shell command, to pick a topic.
-Your progress is kept in Claude Code's local plugin store. See
-[PRIVACY.md](PRIVACY.md).
+Your progress is kept in Claude Code's local plugin store, and
+`/holdtime reset` deletes it. See [PRIVACY.md](PRIVACY.md).
 
 ## Troubleshooting
 
@@ -125,9 +126,14 @@ Answer Claude; the card returns when it continues.
 
 ```bash
 claude plugin validate .claude-plugin/plugin.json   # manifest and hooks module
-claude plugin test .                                 # 17 tests
+claude plugin test .                                 # 25 tests
 claude --plugin-dir .                                # run your working copy
 ```
+
+For editor type checking, run `/plugin-types` once inside Claude Code from
+this folder. It writes Claude Code's API types to `.claude/types/`, which
+`tsconfig.json` reads and git ignores. Then `npx tsc -p tsconfig.json` checks
+the code and the tests.
 
 ```
 hooks/register.tsx    events and the band: what Holdtime does in Claude Code

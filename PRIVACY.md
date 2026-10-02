@@ -17,13 +17,20 @@ it reads, what it keeps, and what it sends.
 - **Which tool Claude uses**, and from that tool's input only: the file's
   extension (such as `.py`) or the first word of a shell command (such as
   `pytest`). This picks the topic of the next card. It is not stored.
+- **Whether a few project files exist** in the folder Claude works in
+  (`package.json`, `tsconfig.json`, `pyproject.toml`, `requirements.txt`,
+  `setup.py`), once per session, to choose the first topic. Their contents
+  are never read.
+- **Which call Claude is waiting to have approved**, held in memory only, so
+  the card comes back once that call goes ahead.
 - **When a turn starts and ends**, and when Claude asks for permission or a
   decision, so cards appear and step aside at the right moments.
 - **Your answers** to cards: the key you press.
 
 ## What it stores
 
-In Claude Code's local plugin store on your computer:
+In Holdtime's own file in Claude Code's local plugin store, under
+`~/.claude/plugins/store/` on your computer:
 
 | Item | Contents |
 | --- | --- |
@@ -37,9 +44,10 @@ In Claude Code's local plugin store on your computer:
 
 ## Removing your data
 
-Uninstall the plugin (`claude plugin uninstall holdtime@holdtime`). Claude Code
-keeps the plugin store with other plugin data under your Claude configuration
-folder; deleting that folder's Holdtime entry removes the progress.
+Run `/holdtime reset` to delete your progress and today's count at once. To
+remove Holdtime completely, uninstall it with
+`claude plugin uninstall holdtime@holdtime` and delete its file under
+`~/.claude/plugins/store/`.
 
 ## Children
 
