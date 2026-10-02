@@ -11,18 +11,28 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Card, Feedback, Topic, TurnTally } from '../types'
 import { CARDS } from '../content'
+import { BATCH_TOKENS, buildPrompt, MODEL, parseCards, SYSTEM, TIMEOUT_MS } from '../content/generate'
 import {
-  accuracyByTopic, bump, dayOf, decay, freshWeights, grade, isAnswered, keyOf, pickCard,
-  PROJECT_FILES, seed, topicOf, TOPICS,
+  accuracyByTopic, bump, dayOf, decay, freshWeights, grade, isAnswered, keyOf, labelOf, pickCard,
+  PROJECT_FILES, seed, topicOf,
 } from './planner'
 import type { Ask, Progress, Weights } from './planner'
+import { avoidFor, merge, needsRefill, readLibrary, topicToFill } from './pool'
 
 const cardAtom = atom({ plugin: 'holdtime', key: 'card' } as const, null)
 const feedbackAtom = atom({ plugin: 'holdtime', key: 'feedback' } as const, null)
 const needsYouAtom = atom({ plugin: 'holdtime', key: 'needsYou' } as const, false)
 const tallyAtom = atom({ plugin: 'holdtime', key: 'tally' } as const, { seen: 0, asked: 0, right: 0 })
 
-const TOPIC_NAMES: Record<Topic, string> = { javascript: 'JavaScript', python: 'Python', git: 'Git' }
+/** How long after a topic goes quiet before its cards are generated. */
+const REFILL_DELAY_MS = 1500
+
+/**
+ * How long before the same topic may be asked about again. A model that
+ * returns few usable cards leaves the topic short, so without this the next
+ * tool call would queue another paid request, and so would the one after it.
+ */
+const RETRY_MS = 5 * 60_000
 
 /** Notifications that mean Claude is waiting on the person. */
 const NEEDS_YOU = new Set(['permission_prompt', 'agent_needs_input', 'elicitation_dialog', 'elicitation_url_dialog'])
@@ -52,6 +62,21 @@ const session = {
    * awaits, so a second press of the same key cannot count twice.
    */
   isBusy: false,
+  /** Whether cards may be generated. Off makes Holdtime pack-only and offline. */
+  isAiOn: true,
+  /** Generated cards, shared with every session through $.store. */
+  library: [] as Card[],
+  /** Set while a batch is being generated, so only one is in flight. */
+  isGenerating: false,
+  /** The pending background refill, cancelled when a newer topic arrives. */
+  refill: null as { cancel: () => void } | null,
+  /** When each topic was last asked about, so a short reply cannot loop. */
+  triedAt: {} as Record<Topic, number>,
+}
+
+/** Everything that can be shown: the shipped packs and what a model wrote. */
+function allCards(): readonly Card[] {
+  return session.library.length === 0 ? CARDS : [...CARDS, ...session.library]
 }
 
 /** Takes the press lock; false when another press is still being handled. */
@@ -75,13 +100,67 @@ async function readDay($: EngineInterface): Promise<DayCount> {
   return stored && stored.date === date ? stored : { date, count: 0 }
 }
 
+/**
+ * Asks a model for a batch of cards on one topic and keeps the ones fit to
+ * show. Runs off a timer, never on the path between a turn starting and the
+ * first card, so a slow or failed request costs the person nothing but a
+ * pack card instead of a generated one. Time inside $.model.complete does
+ * not count against a hook's limit, so there is no rush here.
+ */
+async function generate($: EngineInterface, topic: Topic): Promise<void> {
+  if (!session.isAiOn || session.isGenerating) return
+  session.isGenerating = true
+  try {
+    // Stamped here, where the request is really made, rather than where it is
+    // queued: a queued refill can be cancelled by a newer topic, and that
+    // topic was never asked about, so it must not be held back.
+    session.triedAt[topic] = await $.clock.now()
+    const reply = await $.model.complete({
+      model: MODEL,
+      system: SYSTEM,
+      prompt: buildPrompt(topic, avoidFor(session.library, CARDS, topic)),
+      maxTokens: BATCH_TOKENS,
+      timeoutMs: TIMEOUT_MS,
+    })
+    // A Claude API failure resolves rather than rejects, so this is the check.
+    if (!reply.isAnswered) return
+    const made = parseCards(topic, reply.text)
+    if (made.length === 0) return
+    // Another session may have generated since this one last read.
+    const stored = readLibrary(await $.store.get('library'))
+    session.library = merge(stored, made)
+    await $.store.set('library', session.library)
+  } catch {
+    // A model the organization blocks, or no credentials: stay on the packs.
+  } finally {
+    session.isGenerating = false
+  }
+}
+
+/**
+ * Queues a refill for the topic the session leans towards, if that topic is
+ * running short. Called as tool calls come in, so it is debounced: only the
+ * last topic of a burst is generated for.
+ */
+async function queueRefill($: EngineInterface): Promise<void> {
+  if (!session.isAiOn || session.isGenerating) return
+  const topic = topicToFill(session.weights)
+  if (!needsRefill(session.library, topic, session.shown)) return
+  const tried = session.triedAt[topic]
+  if (tried !== undefined && (await $.clock.now()) - tried < RETRY_MS) return
+  session.refill?.cancel()
+  // Awaited because the mods API may hand back the timer through a promise;
+  // awaiting a plain timer is harmless either way.
+  session.refill = await $.clock.after(REFILL_DELAY_MS, () => generate($, topic))
+}
+
 /** Shows the next card, or nothing when a cap is reached or learning is off. */
 async function showNext($: EngineInterface): Promise<void> {
   const tally = await read($, tallyAtom)
   const day = await readDay($)
   const isCapped = tally.seen >= session.maxPerTurn || day.count >= session.dailyGoal
   const isOff = session.isPaused || session.isHiddenThisTurn || isCapped
-  const card = isOff ? null : pickCard(CARDS, session.weights, session.progress, day.date, session.shown)
+  const card = isOff ? null : pickCard(allCards(), session.weights, session.progress, day.date, session.shown)
   if (card) session.shown.add(card.id)
   session.unanswered = card?.id ?? null
   await update($, feedbackAtom, () => null)
@@ -93,19 +172,28 @@ async function showNext($: EngineInterface): Promise<void> {
  * session may have written since), counts it for today, and saves both.
  */
 async function record($: EngineInterface, card: Card, isRight: boolean | null): Promise<void> {
-  const day = await readDay($)
+  const date = await today($)
   const stored = ((await $.store.get('progress')) as Progress | undefined) ?? {}
-  session.progress = grade(stored, card, isRight, day.date)
-  const counted: DayCount = { date: day.date, count: day.count + 1 }
+  session.progress = grade(stored, card, isRight, date)
   await $.store.set('progress', session.progress)
+
+  // Read the count as late as possible, so the gap between reading it and
+  // writing it back is as short as $.store allows. There is no atomic
+  // increment, so two sessions answering at the same moment can still lose a
+  // count; the cap it feeds is a soft one, so that is acceptable.
+  const day = await readDay($)
+  const counted: DayCount = { date: day.date, count: day.count + 1 }
   await $.store.set('day', counted)
+
   session.unanswered = null
   await update($, tallyAtom, t => ({
     seen: t.seen + 1,
     asked: t.asked + (isRight === null ? 0 : 1),
     right: t.right + (isRight === true ? 1 : 0),
   }))
-  if (counted.count === session.dailyGoal) {
+  // Toast on the card that carries the count over the goal, not on an exact
+  // match: another session's write can take it past the goal in one step.
+  if (day.count < session.dailyGoal && counted.count >= session.dailyGoal) {
     $.ui.toast(`Holdtime: daily goal of ${session.dailyGoal} cards reached. Nice work.`)
   }
 }
@@ -163,15 +251,21 @@ function forgetUnanswered(): void {
 
 async function statsText($: EngineInterface): Promise<string> {
   const day = await readDay($)
-  const byTopic = accuracyByTopic(CARDS, session.progress)
-  const asked = TOPICS.reduce((n, t) => n + byTopic[t].asked, 0)
-  const right = TOPICS.reduce((n, t) => n + byTopic[t].right, 0)
+  const byTopic = accuracyByTopic(allCards(), session.progress)
+  const rows = Object.entries(byTopic).sort((a, b) => b[1].asked - a[1].asked)
+  const asked = rows.reduce((n, [, row]) => n + row.asked, 0)
+  const right = rows.reduce((n, [, row]) => n + row.right, 0)
   const pct = (r: number, a: number): string => (a === 0 ? '-' : `${Math.round((100 * r) / a)}%`)
-  const topics = TOPICS.map(t => `${TOPIC_NAMES[t]} ${pct(byTopic[t].right, byTopic[t].asked)} (${byTopic[t].asked})`).join(' · ')
+  // Only the topics actually answered, most answered first: the set is open
+  // now, so listing every topic that exists would be a wall of dashes.
+  const topics = rows.length === 0
+    ? 'nothing answered yet'
+    : rows.slice(0, 6).map(([t, row]) => `${labelOf(t)} ${pct(row.right, row.asked)} (${row.asked})`).join(' · ')
   return [
     `${session.isPaused ? 'Paused. ' : ''}${day.count}/${session.dailyGoal} cards today.`,
     `Questions answered: ${asked}, right: ${right} (${pct(right, asked)}).`,
     `By topic: ${topics}.`,
+    `Cards available: ${CARDS.length} shipped${session.isAiOn ? `, ${session.library.length} generated` : ' (generation off)'}.`,
     session.isPaused ? '`/holdtime resume` turns the cards back on.' : '`/holdtime pause` turns the cards off.',
   ].join('\n')
 }
@@ -188,8 +282,22 @@ async function setPaused($: EngineInterface, isPaused: boolean): Promise<void> {
 async function reset($: EngineInterface): Promise<void> {
   await $.store.delete('progress')
   await $.store.delete('day')
+  await $.store.delete('library')
   session.progress = {}
   session.shown.clear()
+  // Generated cards are saved data too, so "start fresh" drops them as well.
+  // The next topic signal fills the library again, right away rather than
+  // after the usual wait between requests.
+  session.library = []
+  session.triedAt = {}
+  // Leave no card or count behind: one still on screen would be graded onto
+  // the progress that was just deleted, and this turn's tally would describe
+  // cards that no longer count towards anything.
+  forgetUnanswered()
+  const fresh: TurnTally = { seen: 0, asked: 0, right: 0 }
+  await update($, cardAtom, () => null)
+  await update($, feedbackAtom, () => null)
+  await update($, tallyAtom, () => fresh)
 }
 
 async function startTurn($: EngineInterface): Promise<void> {
@@ -246,21 +354,31 @@ async function load($: EngineInterface): Promise<void> {
   })
   session.progress = ((await $.store.get('progress')) as Progress | undefined) ?? {}
   session.isPaused = (await $.store.get('paused')) === true
+  session.library = readLibrary(await $.store.get('library'))
   const found: Topic[] = []
   for (const [file, topic] of PROJECT_FILES) {
     if (await $.fs.exists(file)) found.push(topic)
   }
   session.weights = seed(freshWeights(), found)
+  // Fill the library for what this project is written in, before the first
+  // turn needs a card. Only the timer is awaited, not the generation itself,
+  // so the session starts right away.
+  await queueRefill($)
 }
 
 export const register: Register = (on, options) => {
   session.dailyGoal = Number(options['daily_goal'] ?? 20)
   session.maxPerTurn = Number(options['max_per_turn'] ?? 5)
+  session.isAiOn = options['ai_cards'] !== false
   session.weights = freshWeights()
   session.shown = new Set<string>()
   session.unanswered = null
   session.ask = null
   session.isBusy = false
+  session.library = []
+  session.isGenerating = false
+  session.refill = null
+  session.triedAt = {}
 
   on('session.start', async ($, e, next) => {
     await load($)
@@ -295,7 +413,10 @@ export const register: Register = (on, options) => {
   on('tool.call', async ($, e, next) => {
     const input = e as unknown as Readonly<Record<string, unknown>>
     const topic = topicOf(e.tool, input)
-    if (topic) session.weights = bump(session.weights, topic)
+    if (topic) {
+      session.weights = bump(session.weights, topic)
+      await queueRefill($)
+    }
     const call = { tool: e.tool, key: keyOf(input), startedAt: await now($) }
     await noteCall($, call, false)
     const ran = await next(e)
@@ -329,7 +450,7 @@ export const register: Register = (on, options) => {
 
     const { Box, Button, Markdown, Text } = $.ui.resolve(e)
     const isAsking = card.kind === 'yesno' && !feedback
-    const title = `Holdtime · ${TOPIC_NAMES[card.topic]}${isAsking ? ' · yes or no?' : ''}`
+    const title = `Holdtime · ${labelOf(card.topic)}${isAsking ? ' · yes or no?' : ''}`
     const body = feedback ? `${feedback.isRight ? '**Right.**' : '**Not quite.**'} ${feedback.text}` : card.text
 
     // The buttons share the first row with the title: a band shorter than the

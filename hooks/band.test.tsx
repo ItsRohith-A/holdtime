@@ -9,11 +9,23 @@ const BAND = {
   props: { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 100, scroll: { offset: 0, bodyRows: 10 }, view: {} },
 } as const
 
-/** The engine's own answers beneath the plugin, for the events a turn raises. */
-function engine(on: On, store: Record<string, unknown> = {}): MockClock {
+/**
+ * The engine's own answers beneath the plugin, for the events a turn raises.
+ * `reply` stands in for what a model would write; by default it answers
+ * nothing, so a test gets pack cards only and stays deterministic.
+ */
+function engine(on: On, store: Record<string, unknown> = {}, reply: string | null = null): MockClock {
   mock.store(on, store)
   const clock = mock.clock(on, { now: NOW })
+  // $.model.complete is an event like any other, so the test answers it
+  // instead of reaching the Claude API.
+  on('model.complete', () => ({
+    value: reply === null ? { isAnswered: false, reason: 'no model in this test' } : { isAnswered: true, text: reply },
+  }) as never)
   on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  // Core resolves turn.complete to `{ text }`, and for a main-loop turn that
+  // text is the answer itself. A mod returning a different text has it shown
+  // beneath the answer; returning core's result unchanged adds nothing.
   on('turn.complete', (_$, e) => ({ text: e.answer }))
   on('tool.call', () => ({ result: 'ok' }) as never)
   on('classic.Notification', () => ({}))
@@ -113,6 +125,7 @@ test('nothing shows when Claude is idle, and a turn with no card says nothing', 
   await ui.unmount()
 
   const done = await $.turn.complete(complete as never)
+  // Core's own text, unchanged: nothing is shown beneath the answer.
   expect(done.text).toBe('Done.')
 })
 
@@ -154,4 +167,102 @@ test('/holdtime reset deletes saved progress', async ($, on) => {
   const after = await $.command.run(command(''))
   expect(after.text).toMatch(/^0\/20 cards today\./)
   expect(after.text).toMatch(/Questions answered: 0,/)
+})
+
+test('/holdtime reset clears the card on screen and the tally', async ($, on) => {
+  engine(on)
+  await $.turn.start({ text: 'one', turnId: 't1' })
+  const ui = await $.ui.mount({ plugin: 'holdtime', surface: 'terminal', ...BAND })
+  await ui.press({ key: (await ui.find({ key: 'yes' })) ? 'yes' : 'next' })
+
+  // A card is on screen, either the answered one or the next one.
+  expect(await ui.find({ key: 'hide' })).toBeDefined()
+  await $.command.run(command('reset'))
+  await ui.redraw()
+  expect(await ui.find({ key: 'hide' })).toBeUndefined()
+  await ui.unmount()
+
+  // The tally went with it, so the turn adds no line beneath the answer.
+  const done = await $.turn.complete(complete as never)
+  expect(done.text).toBe('Done.')
+})
+
+test('a card a model wrote joins the library and is counted in the stats', async ($, on) => {
+  const made = JSON.stringify([
+    { kind: 'fact', text: '`cargo add serde` edits `Cargo.toml` for you.' },
+    { kind: 'yesno', text: 'Does `cargo build` write to `target/`?', answer: true, explain: 'Yes, that is the default output directory.' },
+  ])
+  const clock = engine(on, {}, made)
+  await $.turn.start({ text: 'port it to rust', turnId: 't1' })
+
+  // Working on a .rs file points the session at Rust, which no pack covers.
+  await $.tool.call({ tool: 'Read', file_path: 'src/main.rs', tool_use_id: 'toolu_1' } as never)
+  // The refill is queued on a timer, so nothing has been asked for yet.
+  const before = await $.command.run(command(''))
+  expect(before.text).toMatch(/0 generated/)
+
+  await clock.advance(5000)
+  await clock.settle()
+
+  const after = await $.command.run(command(''))
+  expect(after.text).toMatch(/2 generated/)
+})
+
+test('a model that answers nothing leaves the packs working', async ($, on) => {
+  const clock = engine(on)
+  await $.turn.start({ text: 'port it to rust', turnId: 't1' })
+  await $.tool.call({ tool: 'Read', file_path: 'src/main.rs', tool_use_id: 'toolu_1' } as never)
+  await clock.advance(5000)
+  await clock.settle()
+
+  const ui = await $.ui.mount({ plugin: 'holdtime', surface: 'terminal', ...BAND })
+  expect(await ui.find({ key: 'hide' })).toBeDefined()
+  await ui.unmount()
+
+  const stats = await $.command.run(command(''))
+  expect(stats.text).toMatch(/0 generated/)
+})
+
+test('pausing stops cards across turns, and resuming brings them back', async ($, on) => {
+  engine(on)
+  await $.turn.start({ text: 'one', turnId: 't1' })
+  await $.command.run(command('pause'))
+
+  await $.turn.start({ text: 'two', turnId: 't2' })
+  const paused = await $.ui.mount({ plugin: 'holdtime', surface: 'terminal', ...BAND })
+  expect(await paused.find({ key: 'hide' })).toBeUndefined()
+  await paused.unmount()
+
+  await $.command.run(command('resume'))
+  await $.turn.start({ text: 'three', turnId: 't3' })
+  const back = await $.ui.mount({ plugin: 'holdtime', surface: 'terminal', ...BAND })
+  expect(await back.find({ key: 'hide' })).toBeDefined()
+  await back.unmount()
+})
+
+test('generation turned off keeps the packs and asks no model', { options: { ai_cards: false } }, async ($, on) => {
+  const clock = engine(on, {}, JSON.stringify([{ kind: 'fact', text: 'Never asked for.' }]))
+  await $.turn.start({ text: 'port it to rust', turnId: 't1' })
+  await $.tool.call({ tool: 'Read', file_path: 'src/main.rs', tool_use_id: 'toolu_1' } as never)
+  await clock.advance(60_000)
+  await clock.settle()
+
+  const ui = await $.ui.mount({ plugin: 'holdtime', surface: 'terminal', ...BAND })
+  expect(await ui.find({ key: 'hide' })).toBeDefined()
+  await ui.unmount()
+
+  const stats = await $.command.run(command(''))
+  expect(stats.text).toMatch(/generation off/)
+})
+
+test('a subagent turn adds no summary, even after a card was answered', async ($, on) => {
+  engine(on)
+  await $.turn.start({ text: 'one', turnId: 't1' })
+  const ui = await $.ui.mount({ plugin: 'holdtime', surface: 'terminal', ...BAND })
+  await ui.press({ key: (await ui.find({ key: 'yes' })) ? 'yes' : 'next' })
+  await ui.unmount()
+
+  // There is a summary to add, so the agentId guard is what keeps it away.
+  const done = await $.turn.complete({ ...complete, agentId: 'a1' } as never)
+  expect(done.text).toBe('Done.')
 })

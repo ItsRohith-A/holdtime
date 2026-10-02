@@ -21,9 +21,9 @@ export const PYTHON: readonly Card[] = [
   { id: 'py-fixture-yield', topic: 'python', kind: 'fact', text: 'A pytest fixture that uses `yield` runs the code after the yield as teardown, once the test ends.' },
   { id: 'py-typeddict', topic: 'python', kind: 'fact', text: '`TypedDict` describes the keys of a dict for type checkers; nothing is checked at runtime.' },
   {
-    id: 'py-float', topic: 'python', kind: 'yesno', answer: false,
-    text: 'Is `0.1 + 0.2 == 0.3` true?',
-    explain: 'Floating point gives 0.30000000000000004. Use `math.isclose(a, b)` to compare.',
+    id: 'py-float', topic: 'python', kind: 'yesno', answer: true,
+    text: 'Is `0.1 + 0.2` greater than `0.3`?',
+    explain: 'Yes. Binary floating point gives 0.30000000000000004, so `== 0.3` is false. Compare with `math.isclose(a, b)`.',
   },
   {
     id: 'py-one-tuple', topic: 'python', kind: 'yesno', answer: false,
@@ -41,9 +41,9 @@ export const PYTHON: readonly Card[] = [
     explain: 'Yes, a step of -1 walks the list backwards and builds a new list.',
   },
   {
-    id: 'py-round-half', topic: 'python', kind: 'yesno', answer: false,
-    text: 'Does `round(2.5)` return 3?',
-    explain: 'It returns 2. Python rounds halves to the nearest even number ("banker\'s rounding").',
+    id: 'py-round-half', topic: 'python', kind: 'yesno', answer: true,
+    text: 'Does `round(2.5)` return 2?',
+    explain: 'Yes. Python rounds a half to the nearest even number ("banker\'s rounding"), so `round(3.5)` is 4.',
   },
   {
     id: 'py-string-repeat', topic: 'python', kind: 'yesno', answer: true,
@@ -81,9 +81,9 @@ export const PYTHON: readonly Card[] = [
     explain: 'No, strings are immutable. Build a new one: `"x" + s[1:]`.',
   },
   {
-    id: 'py-range-end', topic: 'python', kind: 'yesno', answer: false,
-    text: 'Does `range(5)` include 5?',
-    explain: 'No, it gives 0 to 4. The end of a range is excluded.',
+    id: 'py-range-end', topic: 'python', kind: 'yesno', answer: true,
+    text: 'Does `range(5)` stop at 4?',
+    explain: 'Yes, it gives 0 to 4. The end of a range is excluded, so `range(5)` yields five values.',
   },
   {
     id: 'py-shallow-copy', topic: 'python', kind: 'yesno', answer: false,
@@ -91,14 +91,14 @@ export const PYTHON: readonly Card[] = [
     explain: 'No, it is shallow: the nested lists are shared. Use `copy.deepcopy`.',
   },
   {
-    id: 'py-sorted-in-place', topic: 'python', kind: 'yesno', answer: false,
-    text: 'Does `sorted(items)` change `items`?',
-    explain: 'No, it returns a new list. `items.sort()` sorts in place and returns None.',
+    id: 'py-sorted-in-place', topic: 'python', kind: 'yesno', answer: true,
+    text: 'Does `sorted(items)` leave `items` as it was?',
+    explain: 'Yes, it returns a new list. `items.sort()` is the one that sorts in place, and it returns None.',
   },
   {
-    id: 'py-empty-braces', topic: 'python', kind: 'yesno', answer: false,
-    text: 'Does `{}` create an empty set?',
-    explain: 'It creates an empty dict. An empty set is `set()`.',
+    id: 'py-empty-braces', topic: 'python', kind: 'yesno', answer: true,
+    text: 'Does `{}` create an empty dict?',
+    explain: 'Yes. `{}` is a dict, not a set; an empty set has to be written `set()`.',
   },
   {
     id: 'py-generator-len', topic: 'python', kind: 'yesno', answer: false,
