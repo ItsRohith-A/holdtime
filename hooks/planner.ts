@@ -1,12 +1,10 @@
 /**
  * Holdtime's decisions, with no access to Claude Code: which topic a tool call
- * points at, which card comes next, and how an answer moves a card between
- * spaced-repetition boxes. Everything here is a plain function of its inputs,
- * so it is tested directly.
+ * points at, which card comes next, how an answer moves a card between
+ * spaced-repetition boxes, and whether a card is fit to show. Everything here
+ * is a plain function of its inputs, so it is tested directly.
  */
 import type { Card, Topic } from '../types'
-
-export const TOPICS: readonly Topic[] = ['javascript', 'python', 'git']
 
 /** A card's place in the Leitner system, kept per card id in the store. */
 export type CardProgress = {
@@ -20,6 +18,11 @@ export type CardProgress = {
 
 export type Progress = Readonly<Record<string, CardProgress>>
 
+/**
+ * How much each topic is worth when the next card's topic is drawn. A topic
+ * with no entry is worth `BASE_WEIGHT`, so the map holds only the topics this
+ * session has actually seen rather than every topic that exists.
+ */
 export type Weights = Readonly<Record<Topic, number>>
 
 /** Days until a card in each box comes back: box 1 tomorrow, box 5 in 16 days. */
@@ -31,25 +34,70 @@ export const BASE_WEIGHT = 0.5
 /** How much of a topic's weight carries into the next turn. */
 export const DECAY = 0.8
 
+/** The topics the shipped packs cover. */
+export const PACK_TOPICS: readonly Topic[] = ['javascript', 'python', 'git']
+
 export function freshWeights(): Weights {
-  return { javascript: BASE_WEIGHT, python: BASE_WEIGHT, git: BASE_WEIGHT }
+  return {}
+}
+
+/** A topic's weight, or the base weight when the session has not seen it. */
+export function weightOf(weights: Weights, topic: Topic): number {
+  return weights[topic] ?? BASE_WEIGHT
 }
 
 /** Fades older signals at the start of a turn, never below the base weight. */
 export function decay(weights: Weights): Weights {
-  const out = { ...weights }
-  for (const topic of TOPICS) {
-    out[topic] = Math.max(BASE_WEIGHT, weights[topic] * DECAY)
+  const out: Record<Topic, number> = {}
+  for (const [topic, weight] of Object.entries(weights)) {
+    out[topic] = Math.max(BASE_WEIGHT, weight * DECAY)
   }
   return out
 }
 
+/** Adds one to a topic's weight. */
+export function bump(weights: Weights, topic: Topic): Weights {
+  return { ...weights, [topic]: weightOf(weights, topic) + 1 }
+}
+
+/** The topic the session leans towards most, or `null` with no signal yet. */
+export function leadingTopic(weights: Weights): Topic | null {
+  let best: Topic | null = null
+  let most = BASE_WEIGHT
+  for (const [topic, weight] of Object.entries(weights)) {
+    if (weight > most) {
+      best = topic
+      most = weight
+    }
+  }
+  return best
+}
+
 const EXTENSIONS: ReadonlyArray<[RegExp, Topic]> = [
+  // The shipped pack covers JavaScript and TypeScript together, so both map
+  // to one topic rather than splitting the pack's cards away from .ts files.
   [/\.(m|c)?(j|t)sx?$/i, 'javascript'],
   [/(^|\/)(package\.json|tsconfig[^/]*\.json)$/i, 'javascript'],
   [/\.pyi?$/i, 'python'],
   [/(^|\/)(pyproject\.toml|requirements[^/]*\.txt|setup\.py)$/i, 'python'],
   [/(^|\/)\.git(ignore|attributes|modules)$/i, 'git'],
+  [/\.rs$/i, 'rust'],
+  [/(^|\/)Cargo\.toml$/i, 'rust'],
+  [/\.go$/i, 'go'],
+  [/(^|\/)go\.(mod|sum)$/i, 'go'],
+  [/\.rb$/i, 'ruby'],
+  [/(^|\/)(Gemfile|Rakefile)$/i, 'ruby'],
+  [/\.java$/i, 'java'],
+  [/(^|\/)(pom\.xml|build\.gradle(\.kts)?)$/i, 'java'],
+  [/\.kts?$/i, 'kotlin'],
+  [/\.swift$/i, 'swift'],
+  [/\.php$/i, 'php'],
+  [/\.cs$/i, 'csharp'],
+  [/\.sql$/i, 'sql'],
+  [/\.tf(vars)?$/i, 'terraform'],
+  [/(^|\/)(Dockerfile|docker-compose\.ya?ml|compose\.ya?ml)$/i, 'docker'],
+  [/\.(sh|bash|zsh)$/i, 'shell'],
+  [/\.s?css$/i, 'css'],
 ]
 
 const PROGRAMS: Readonly<Record<string, Topic>> = {
@@ -61,8 +109,8 @@ const PROGRAMS: Readonly<Record<string, Topic>> = {
   pnpm: 'javascript',
   yarn: 'javascript',
   bun: 'javascript',
-  tsc: 'javascript',
   deno: 'javascript',
+  tsc: 'javascript',
   python: 'python',
   python3: 'python',
   pip: 'python',
@@ -72,6 +120,37 @@ const PROGRAMS: Readonly<Record<string, Topic>> = {
   poetry: 'python',
   ruff: 'python',
   mypy: 'python',
+  cargo: 'rust',
+  rustc: 'rust',
+  rustup: 'rust',
+  go: 'go',
+  gofmt: 'go',
+  ruby: 'ruby',
+  rails: 'ruby',
+  bundle: 'ruby',
+  gem: 'ruby',
+  rake: 'ruby',
+  java: 'java',
+  javac: 'java',
+  mvn: 'java',
+  gradle: 'java',
+  kotlinc: 'kotlin',
+  swift: 'swift',
+  php: 'php',
+  composer: 'php',
+  dotnet: 'csharp',
+  psql: 'sql',
+  mysql: 'sql',
+  sqlite3: 'sql',
+  docker: 'docker',
+  'docker-compose': 'docker',
+  podman: 'docker',
+  kubectl: 'kubernetes',
+  helm: 'kubernetes',
+  k9s: 'kubernetes',
+  minikube: 'kubernetes',
+  terraform: 'terraform',
+  tofu: 'terraform',
 }
 
 /**
@@ -99,11 +178,6 @@ export function topicOf(tool: string, input: Readonly<Record<string, unknown>>):
   return null
 }
 
-/** Adds one to a topic's weight. */
-export function bump(weights: Weights, topic: Topic): Weights {
-  return { ...weights, [topic]: weights[topic] + 1 }
-}
-
 /**
  * Project files that say what a repository is written in, checked once at
  * session start so the very first card already fits the project.
@@ -114,11 +188,43 @@ export const PROJECT_FILES: ReadonlyArray<[string, Topic]> = [
   ['pyproject.toml', 'python'],
   ['requirements.txt', 'python'],
   ['setup.py', 'python'],
+  ['Cargo.toml', 'rust'],
+  ['go.mod', 'go'],
+  ['Gemfile', 'ruby'],
+  ['pom.xml', 'java'],
+  ['composer.json', 'php'],
+  ['Dockerfile', 'docker'],
 ]
 
 /** Raises the weight of each topic a project file pointed at, once per topic. */
 export function seed(weights: Weights, found: readonly Topic[]): Weights {
   return [...new Set(found)].reduce(bump, weights)
+}
+
+const LABELS: Readonly<Record<string, string>> = {
+  javascript: 'JavaScript',
+  typescript: 'TypeScript',
+  python: 'Python',
+  git: 'Git',
+  rust: 'Rust',
+  go: 'Go',
+  ruby: 'Ruby',
+  java: 'Java',
+  kotlin: 'Kotlin',
+  swift: 'Swift',
+  php: 'PHP',
+  csharp: 'C#',
+  sql: 'SQL',
+  docker: 'Docker',
+  kubernetes: 'Kubernetes',
+  terraform: 'Terraform',
+  shell: 'Shell',
+  css: 'CSS',
+}
+
+/** The name a topic is shown under in the band and in `/holdtime`. */
+export function labelOf(topic: Topic): string {
+  return LABELS[topic] ?? topic.charAt(0).toUpperCase() + topic.slice(1)
 }
 
 /**
@@ -173,22 +279,61 @@ export function grade(progress: Progress, card: Card, isRight: boolean | null, t
   }
 }
 
-/** Picks from `items` with chances in proportion to `weightOf`. */
-function weighted<T>(items: readonly T[], weightOf: (item: T) => number, rand: () => number): T | undefined {
-  const total = items.reduce((sum, item) => sum + Math.max(0, weightOf(item)), 0)
+/** The longest a card's question or fact may be, so the band stays one line. */
+export const MAX_TEXT = 130
+
+/** The bounds an explanation has to fall inside. */
+export const MIN_EXPLAIN = 11
+export const MAX_EXPLAIN = 199
+
+/**
+ * Whether a card is fit to show. The shipped packs are checked against this in
+ * the tests, and every generated card is filtered through it before it is
+ * kept, so a model that writes something too long, one-sided or malformed has
+ * that card dropped rather than shown.
+ */
+export function isValidCard(value: unknown): value is Card {
+  if (typeof value !== 'object' || value === null) return false
+  const card = value as Partial<Card>
+  if (typeof card.id !== 'string' || card.id.length === 0) return false
+  if (typeof card.topic !== 'string' || card.topic.length === 0) return false
+  if (typeof card.text !== 'string') return false
+  if (card.text.length === 0 || card.text.length >= MAX_TEXT) return false
+  if (card.kind === 'fact') return card.answer === undefined
+  if (card.kind !== 'yesno') return false
+  if (typeof card.answer !== 'boolean') return false
+  if (!card.text.endsWith('?')) return false
+  const explain = card.explain
+  return typeof explain === 'string' && explain.length >= MIN_EXPLAIN && explain.length <= MAX_EXPLAIN
+}
+
+/** A short stable hash of some text, used to give a generated card its id. */
+export function hashOf(text: string): string {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return hash.toString(36)
+}
+
+/** Picks from `items` with chances in proportion to `weightFor`. */
+function weighted<T>(items: readonly T[], weightFor: (item: T) => number, rand: () => number): T | undefined {
+  const total = items.reduce((sum, item) => sum + Math.max(0, weightFor(item)), 0)
   if (total <= 0) return items.at(Math.floor(rand() * items.length))
   let left = rand() * total
   for (const item of items) {
-    left -= Math.max(0, weightOf(item))
+    left -= Math.max(0, weightFor(item))
     if (left < 0) return item
   }
   return items.at(-1)
 }
 
 /**
- * The next card. A topic is drawn by weight; within it, a card due for review
- * comes first one time in three, else a card never seen, else any card not
- * shown this session. Returns `null` when nothing is left to show.
+ * The next card. A topic is drawn by weight from the topics the remaining
+ * cards cover; within it, a card due for review comes first one time in three,
+ * else a card never seen, else any card not shown this session. Returns `null`
+ * when nothing is left to show.
  */
 export function pickCard(
   cards: readonly Card[],
@@ -201,8 +346,8 @@ export function pickCard(
   const fresh = cards.filter(card => !shown.has(card.id))
   if (fresh.length === 0) return null
 
-  const topics = TOPICS.filter(topic => fresh.some(card => card.topic === topic))
-  const topic = weighted(topics, t => weights[t], rand) ?? topics.at(0)
+  const topics = [...new Set(fresh.map(card => card.topic))]
+  const topic = weighted(topics, t => weightOf(weights, t), rand) ?? topics[0]
   const pool = fresh.filter(card => card.topic === topic)
 
   const due = pool.filter(card => {
@@ -218,12 +363,12 @@ export function pickCard(
 
 /** Right answers out of answered cards, per topic, from the stored progress. */
 export function accuracyByTopic(cards: readonly Card[], progress: Progress): Record<Topic, { asked: number; right: number }> {
-  const out = { javascript: { asked: 0, right: 0 }, python: { asked: 0, right: 0 }, git: { asked: 0, right: 0 } }
+  const out: Record<Topic, { asked: number; right: number }> = {}
   for (const card of cards) {
     const p = progress[card.id]
     if (!p || card.kind !== 'yesno') continue
-    out[card.topic].asked += p.seen
-    out[card.topic].right += p.right
+    const row = out[card.topic] ?? { asked: 0, right: 0 }
+    out[card.topic] = { asked: row.asked + p.seen, right: row.right + p.right }
   }
   return out
 }

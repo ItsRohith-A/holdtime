@@ -1,5 +1,9 @@
-/** A topic a card belongs to; the session's tool calls weight these. */
-export type Topic = 'javascript' | 'python' | 'git'
+/**
+ * A topic a card belongs to, as a lowercase slug such as `python`, `rust` or
+ * `kubernetes`. The set is open: the session's tool calls name the topic, and
+ * a generated card can carry one no pack ships.
+ */
+export type Topic = string
 
 /**
  * One learning card. A `fact` is read and dismissed; a `yesno` is answered
@@ -14,6 +18,8 @@ export type Card = {
   answer?: boolean
   /** One or two short sentences, shown after a `yesno` is answered. */
   explain?: string
+  /** `pack` for a card this plugin ships, `ai` for one a model wrote. */
+  source?: 'pack' | 'ai'
 }
 
 /** What the band shows after a `yesno` card is answered. */

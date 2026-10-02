@@ -2,7 +2,7 @@
   "name": "holdtime",
   "displayName": "Holdtime",
   "description": "Learn while Claude works: short facts and yes/no questions in the band above the prompt, picked from what Claude is doing, paused whenever Claude needs you.",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "author": {
     "name": "Rohith A"
   },
@@ -20,6 +20,12 @@
   ],
   "types": "./types/index.d.ts",
   "userConfig": {
+    "ai_cards": {
+      "type": "boolean",
+      "title": "Write new cards with a model",
+      "description": "Generate cards for whatever this session is about, such as Rust or Kubernetes, instead of only the shipped JavaScript, Python and Git packs. Sends the topic name to Claude in the background and uses your plan.",
+      "default": true
+    },
     "daily_goal": {
       "type": "number",
       "title": "Daily goal",
