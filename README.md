@@ -138,6 +138,40 @@ your code, your prompts or Claude's replies. Turn **Write new cards with a
 model** off in `/config` and Holdtime makes no network requests at all. See
 [PRIVACY.md](PRIVACY.md).
 
+### The permission hook decides nothing
+
+Holdtime handles `classic.PermissionRequest`, the event Claude Code raises when
+it asks you to approve a tool call. It is worth being plain about this one,
+because a hook on that event *could* answer for you. Holdtime's does not.
+
+**It never allows, denies, or changes a request, and it never answers on your
+behalf.** It takes no decision under any condition: there is no branch in it,
+no setting that changes it, and no input that makes it behave differently. It
+reads two things — the tool's name, and the single field that identifies the
+call, such as the command, the path or the URL — writes them to a variable in
+memory, and passes the request on unchanged. Every path ends in `return next(e)`,
+so the permission prompt you see is exactly the one Claude Code would have
+shown without Holdtime installed.
+
+It exists for one reason: the moment Claude needs you, the card leaves the band,
+so the permission prompt has your whole attention instead of competing with a
+quiz. The card comes back when the approved call finishes, or when Claude starts
+new work. What it noted is never written to disk and never sent anywhere.
+
+The hook is four lines, at the end of `register` in
+[hooks/register.tsx](hooks/register.tsx):
+
+```tsx
+on('classic.PermissionRequest', async ($, e, next) => {
+  await waitForYou($, e.tool_name, keyOf((e.tool_input ?? {}) as Readonly<Record<string, unknown>>))
+  return next(e)
+})
+```
+
+Holdtime's hook on `classic.Notification` works the same way and for the same
+reason: it notices that Claude has asked you something, hides the card, and
+passes the notification on untouched.
+
 ## Troubleshooting
 
 **No cards appear.** Check `claude --version` is 2.1.287 or newer, that the
