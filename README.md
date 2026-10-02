@@ -138,6 +138,35 @@ your code, your prompts or Claude's replies. Turn **Write new cards with a
 model** off in `/config` and Holdtime makes no network requests at all. See
 [PRIVACY.md](PRIVACY.md).
 
+### Every event Holdtime handles
+
+A mod sits between Claude Code and what it is about to do, so it is fair to ask
+what each hook sees and what it changes. Holdtime handles eight events. Two of
+them change anything at all, and both change only Holdtime's own output:
+
+| Event | What it reads | What it changes |
+| --- | --- | --- |
+| `session.start` | Whether a few project files exist, to pick the first topic | Nothing. Registers `/holdtime` and loads your saved progress |
+| `command.run` | Only `/holdtime`: a matcher limits the hook to that one command, so no other command reaches it | Nothing. It answers its own command with the text you see |
+| `turn.start` | That a turn began | Nothing. Picks the first card |
+| `tool.call` | The tool's name, a file's extension, the first word of a shell command | Nothing. The call and its result pass through untouched; it never denies, delays or alters a tool call |
+| `classic.PermissionRequest` | The tool's name and the one field identifying the call | Nothing — see below |
+| `classic.Notification` | That Claude has asked you something | Nothing. Passes the notification on untouched |
+| `turn.complete` | The turn's answer and how many cards you saw | Adds one line beneath Claude's answer, the `Holdtime: 2 cards this turn…` summary. Claude's answer itself is untouched |
+| `ui.render` | The band's width, and whether Claude is working | Draws the card in the band above the prompt. It leaves every other part of the screen alone |
+
+`command.run` and `tool.call` are events that are also the names of calls, so a
+hook on either could in principle watch or change such a call made by other
+code. Holdtime's `command.run` hook carries the matcher `{ command: 'holdtime' }`,
+so it is never offered another plugin's command, and its `tool.call` hook
+returns exactly what `next(e)` gave it.
+
+Holdtime reads no file contents, no prompts and none of Claude's replies, and
+cannot: the only file call it makes is `$.fs.exists`. Besides the band, the one
+other thing it puts on screen is a toast the first time you reach the daily
+goal. Run `claude plugin validate .claude-plugin/plugin.json` on a clone to see
+this list of events, and every call the mod makes, printed from the source.
+
 ### The permission hook decides nothing
 
 Holdtime handles `classic.PermissionRequest`, the event Claude Code raises when
