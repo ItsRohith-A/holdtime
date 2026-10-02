@@ -104,7 +104,7 @@ async function statsText($: EngineInterface): Promise<string> {
   const pct = (r: number, a: number): string => (a === 0 ? '-' : `${Math.round((100 * r) / a)}%`)
   const topics = TOPICS.map(t => `${TOPIC_NAMES[t]} ${pct(byTopic[t].right, byTopic[t].asked)} (${byTopic[t].asked})`).join(' · ')
   return [
-    `Holdtime${session.isPaused ? ' (paused)' : ''}: ${count}/${session.dailyGoal} cards today.`,
+    `${session.isPaused ? 'Paused. ' : ''}${count}/${session.dailyGoal} cards today.`,
     `Questions answered: ${asked}, right: ${right} (${pct(right, asked)}).`,
     `By topic: ${topics}.`,
     session.isPaused ? '`/holdtime resume` turns the cards back on.' : '`/holdtime pause` turns the cards off.',
@@ -169,11 +169,11 @@ export const register: Register = (on, options) => {
     const arg = e.args.trim().toLowerCase()
     if (arg === 'pause') {
       await setPaused($, true)
-      return { text: 'Holdtime paused. `/holdtime resume` brings the cards back.' }
+      return { text: 'Paused. `/holdtime resume` brings the cards back.' }
     }
     if (arg === 'resume') {
       await setPaused($, false)
-      return { text: 'Holdtime is on. Cards appear while Claude works.' }
+      return { text: 'On. Cards appear while Claude works.' }
     }
     return { text: await statsText($) }
   })
